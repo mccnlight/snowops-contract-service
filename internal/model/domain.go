@@ -40,14 +40,14 @@ type Contract struct {
 	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
 
 	// Relations
-	ContractorOrg  *OrganizationLookup `json:"contractor,omitempty"`
-	CreatedByOrg   *OrganizationLookup `json:"created_by_org,omitempty"`
-	Usage          *ContractUsage      `json:"usage,omitempty"`
-	UIStatus       ContractUIStatus    `json:"ui_status"`
-	Result         ContractResult      `json:"result"`
-	PayableAmount  float64             `json:"payable_amount"`
-	BudgetExceeded bool                `json:"budget_exceeded"`
-	VolumeProgress float64             `json:"volume_progress"`
+	ContractorOrg  *OrganizationLookup `json:"contractor,omitempty" gorm:"-"`
+	CreatedByOrg   *OrganizationLookup `json:"created_by_org,omitempty" gorm:"-"`
+	Usage          *ContractUsage      `json:"usage,omitempty" gorm:"-"`
+	UIStatus       ContractUIStatus    `json:"ui_status" gorm:"-"`
+	Result         ContractResult      `json:"result" gorm:"-"`
+	PayableAmount  float64             `json:"payable_amount" gorm:"-"`
+	BudgetExceeded bool                `json:"budget_exceeded" gorm:"-"`
+	VolumeProgress float64             `json:"volume_progress" gorm:"-"`
 }
 
 type ContractUsage struct {
