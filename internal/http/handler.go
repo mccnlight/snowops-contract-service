@@ -60,6 +60,26 @@ func (h *Handler) listContracts(c *gin.Context) {
 		contractorID = &parsed
 	}
 
+	var landfillID *uuid.UUID
+	if raw := c.Query("landfill_id"); raw != "" {
+		parsed, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid landfill_id"))
+			return
+		}
+		landfillID = &parsed
+	}
+
+	var contractType *model.ContractType
+	if raw := c.Query("contract_type"); raw != "" {
+		value := model.ContractType(strings.ToUpper(strings.TrimSpace(raw)))
+		if value != model.ContractTypeContractorService && value != model.ContractTypeLandfillService {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid contract_type"))
+			return
+		}
+		contractType = &value
+	}
+
 	var workType *model.WorkType
 	if raw := c.Query("work_type"); raw != "" {
 		value := model.WorkType(strings.ToLower(strings.TrimSpace(raw)))
@@ -124,6 +144,8 @@ func (h *Handler) listContracts(c *gin.Context) {
 		principal,
 		service.ListContractsInput{
 			ContractorID: contractorID,
+			LandfillID:   landfillID,
+			ContractType: contractType,
 			WorkType:     workType,
 			OnlyActive:   onlyActive,
 			Status:       status,
@@ -142,15 +164,18 @@ func (h *Handler) listContracts(c *gin.Context) {
 }
 
 type createContractRequest struct {
-	ContractorID    string  `json:"contractor_id" binding:"required"`
-	Name            string  `json:"name" binding:"required"`
-	WorkType        string  `json:"work_type" binding:"required"`
-	PricePerM3      float64 `json:"price_per_m3" binding:"required,gt=0"`
-	BudgetTotal     float64 `json:"budget_total" binding:"required,gt=0"`
-	MinimalVolumeM3 float64 `json:"minimal_volume_m3" binding:"required,gt=0"`
-	StartAt         string  `json:"start_at" binding:"required"`
-	EndAt           string  `json:"end_at" binding:"required"`
-	IsActive        *bool   `json:"is_active"`
+	ContractType    string      `json:"contract_type" binding:"required"`
+	ContractorID    *string     `json:"contractor_id"` // Опционально для LANDFILL_SERVICE
+	LandfillID      *string     `json:"landfill_id"`   // Опционально для CONTRACTOR_SERVICE
+	PolygonIDs      []uuid.UUID `json:"polygon_ids"`   // Обязательно для LANDFILL_SERVICE
+	Name            string      `json:"name" binding:"required"`
+	WorkType        *string     `json:"work_type"` // Опционально для LANDFILL_SERVICE
+	PricePerM3      float64     `json:"price_per_m3" binding:"required,gt=0"`
+	BudgetTotal     float64     `json:"budget_total" binding:"required,gt=0"`
+	MinimalVolumeM3 float64     `json:"minimal_volume_m3" binding:"required,gt=0"`
+	StartAt         string      `json:"start_at" binding:"required"`
+	EndAt           string      `json:"end_at" binding:"required"`
+	IsActive        *bool       `json:"is_active"`
 }
 
 func (h *Handler) createContract(c *gin.Context) {
@@ -166,18 +191,40 @@ func (h *Handler) createContract(c *gin.Context) {
 		return
 	}
 
-	contractorID, err := uuid.Parse(strings.TrimSpace(req.ContractorID))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, errorResponse("invalid contractor_id"))
+	contractType := model.ContractType(strings.ToUpper(strings.TrimSpace(req.ContractType)))
+	if contractType != model.ContractTypeContractorService && contractType != model.ContractTypeLandfillService {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid contract_type"))
 		return
 	}
 
-	workType := model.WorkType(strings.ToLower(strings.TrimSpace(req.WorkType)))
-	if workType != model.WorkTypeRoad &&
-		workType != model.WorkTypeSidewalk &&
-		workType != model.WorkTypeYard {
-		c.JSON(http.StatusBadRequest, errorResponse("invalid work_type"))
-		return
+	var contractorID *uuid.UUID
+	if req.ContractorID != nil {
+		parsed, err := uuid.Parse(strings.TrimSpace(*req.ContractorID))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid contractor_id"))
+			return
+		}
+		contractorID = &parsed
+	}
+
+	var landfillID *uuid.UUID
+	if req.LandfillID != nil {
+		parsed, err := uuid.Parse(strings.TrimSpace(*req.LandfillID))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid landfill_id"))
+			return
+		}
+		landfillID = &parsed
+	}
+
+	var workType model.WorkType
+	if req.WorkType != nil {
+		wt := model.WorkType(strings.ToLower(strings.TrimSpace(*req.WorkType)))
+		if wt != model.WorkTypeRoad && wt != model.WorkTypeSidewalk && wt != model.WorkTypeYard {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid work_type"))
+			return
+		}
+		workType = wt
 	}
 
 	startAt, err := parseTime(req.StartAt)
@@ -196,7 +243,10 @@ func (h *Handler) createContract(c *gin.Context) {
 		c.Request.Context(),
 		principal,
 		service.CreateContractInput{
+			ContractType:    contractType,
 			ContractorID:    contractorID,
+			LandfillID:      landfillID,
+			PolygonIDs:      req.PolygonIDs,
 			Name:            req.Name,
 			WorkType:        workType,
 			PricePerM3:      req.PricePerM3,

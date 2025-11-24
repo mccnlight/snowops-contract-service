@@ -11,7 +11,9 @@ type UserRole string
 const (
 	UserRoleAkimatAdmin     UserRole = "AKIMAT_ADMIN"
 	UserRoleKguZkhAdmin     UserRole = "KGU_ZKH_ADMIN"
-	UserRoleTooAdmin        UserRole = "TOO_ADMIN"
+	UserRoleTooAdmin        UserRole = "TOO_ADMIN" // Deprecated: use LANDFILL_ADMIN
+	UserRoleLandfillAdmin   UserRole = "LANDFILL_ADMIN"
+	UserRoleLandfillUser    UserRole = "LANDFILL_USER"
 	UserRoleContractorAdmin UserRole = "CONTRACTOR_ADMIN"
 	UserRoleDriver          UserRole = "DRIVER"
 )
@@ -24,24 +26,35 @@ const (
 	WorkTypeYard     WorkType = "yard"
 )
 
+type ContractType string
+
+const (
+	ContractTypeContractorService ContractType = "CONTRACTOR_SERVICE"
+	ContractTypeLandfillService   ContractType = "LANDFILL_SERVICE"
+)
+
 type Contract struct {
-	ID              uuid.UUID  `json:"id"`
-	ContractorID    uuid.UUID  `json:"contractor_id"`
-	CreatedByOrgID  uuid.UUID  `json:"created_by_org_id"`
-	Name            string     `json:"name"`
-	WorkType        WorkType   `json:"work_type"`
-	PricePerM3      float64    `json:"price_per_m3"`
-	BudgetTotal     float64    `json:"budget_total"`
-	MinimalVolumeM3 float64    `json:"minimal_volume_m3"`
-	StartAt         time.Time  `json:"start_at"`
-	EndAt           time.Time  `json:"end_at"`
-	IsActive        bool       `json:"is_active"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
+	ID              uuid.UUID    `json:"id"`
+	ContractorID    *uuid.UUID   `json:"contractor_id,omitempty"` // Опционально для LANDFILL_SERVICE
+	LandfillID      *uuid.UUID   `json:"landfill_id,omitempty"`   // Для LANDFILL_SERVICE
+	CreatedByOrgID  uuid.UUID    `json:"created_by_org_id"`
+	ContractType    ContractType `json:"contract_type"`
+	Name            string       `json:"name"`
+	WorkType        WorkType     `json:"work_type"`
+	PricePerM3      float64      `json:"price_per_m3"`
+	BudgetTotal     float64      `json:"budget_total"`
+	MinimalVolumeM3 float64      `json:"minimal_volume_m3"`
+	StartAt         time.Time    `json:"start_at"`
+	EndAt           time.Time    `json:"end_at"`
+	IsActive        bool         `json:"is_active"`
+	CreatedAt       time.Time    `json:"created_at"`
+	UpdatedAt       *time.Time   `json:"updated_at,omitempty"`
 
 	// Relations
 	ContractorOrg  *OrganizationLookup `json:"contractor,omitempty" gorm:"-"`
+	LandfillOrg    *OrganizationLookup `json:"landfill,omitempty" gorm:"-"`
 	CreatedByOrg   *OrganizationLookup `json:"created_by_org,omitempty" gorm:"-"`
+	PolygonIDs     []uuid.UUID         `json:"polygon_ids,omitempty" gorm:"-"` // Для LANDFILL_SERVICE
 	Usage          *ContractUsage      `json:"usage,omitempty" gorm:"-"`
 	UIStatus       ContractUIStatus    `json:"ui_status" gorm:"-"`
 	Result         ContractResult      `json:"result" gorm:"-"`
@@ -110,6 +123,12 @@ func (p Principal) IsKgu() bool {
 
 func (p Principal) IsToo() bool {
 	return p.Role == UserRoleTooAdmin
+}
+
+// IsLandfill проверяет, является ли пользователь администратором или пользователем полигона
+// Также поддерживает обратную совместимость с TOO_ADMIN
+func (p Principal) IsLandfill() bool {
+	return p.Role == UserRoleLandfillAdmin || p.Role == UserRoleLandfillUser || p.Role == UserRoleTooAdmin
 }
 
 func (p Principal) IsContractor() bool {

@@ -15,11 +15,12 @@ Contract-service отвечает за управление контрактам
   - `KGU_ZKH_ADMIN` — единственный, кто создаёт контракты (без редактирования/удаления после сохранения).
   - `AKIMAT_ADMIN` — полный read-only, может фиксировать usage для аудита.
   - `CONTRACTOR_ADMIN` — read-only только по своим контрактам.
+  - `LANDFILL_ADMIN` — read-only только по своим контрактам приёма (LANDFILL_SERVICE).
   - `TOO_ADMIN`, `DRIVER` — нет доступа.
 - Отслеживание использования через `contract_usage`:
   - Накопленный объём вывезенного снега (`total_volume_m3`).
   - Накопленная стоимость (`total_cost`) и расчёт `payable_amount = min(total_cost, budget_total)`.
-- Фильтры списка контрактов по подрядчику, типу работ, статусу (`PLANNED|ACTIVE|EXPIRED|ARCHIVED`) и диапазонам `start_at`/`end_at`.
+- Фильтры списка контрактов по подрядчику, полигону (landfill_id), типу контракта (`CONTRACTOR_SERVICE|LANDFILL_SERVICE`), типу работ, статусу (`PLANNED|ACTIVE|EXPIRED|ARCHIVED`) и диапазонам `start_at`/`end_at`.
 - Подробные данные по каждому контракту:
   - `/contracts/:id/tickets` — список тикетов с прогрессом и счётчиками.
   - `/contracts/:id/trips` — рейсы, которые легли в usage.
@@ -27,12 +28,15 @@ Contract-service отвечает за управление контрактам
 ## Структура данных
 
 ### Contract (Контракт)
-- `contractor_id` — подрядчик (CONTRACTOR)
-- `created_by_org` — кто создал (Акимат/ТОО)
-- `work_type` — тип работ: `road`, `sidewalk`, `yard`
+- `contract_type` — тип контракта: `CONTRACTOR_SERVICE` (вывоз снега) или `LANDFILL_SERVICE` (приём снега)
+- `contractor_id` — подрядчик (CONTRACTOR), опционально для LANDFILL_SERVICE
+- `landfill_id` — полигон приёма (LANDFILL), опционально для CONTRACTOR_SERVICE
+- `polygon_ids` — список полигонов для LANDFILL_SERVICE контрактов
+- `created_by_org` — кто создал (KGU)
+- `work_type` — тип работ: `road`, `sidewalk`, `yard` (только для CONTRACTOR_SERVICE)
 - `price_per_m3` — цена за кубометр
 - `budget_total` — максимальная сумма по договору
-- `minimal_volume_m3` — минимальный обязательный объём вывоза
+- `minimal_volume_m3` — минимальный обязательный объём вывоза/приёма
 - `start_at`, `end_at` — период действия контракта
 
 ### Contract Usage (Использование контракта)
@@ -93,11 +97,18 @@ go run ./cmd/contract-service
 Получить список контрактов
 
 - Параметры фильтрации:
-  - `contractor_id` — UUID подрядчика.
-  - `work_type` — `road`, `sidewalk`, `yard`.
+  - `contractor_id` — UUID подрядчика (для CONTRACTOR_SERVICE).
+  - `landfill_id` — UUID полигона приёма (для LANDFILL_SERVICE).
+  - `contract_type` — `CONTRACTOR_SERVICE` или `LANDFILL_SERVICE`.
+  - `work_type` — `road`, `sidewalk`, `yard` (только для CONTRACTOR_SERVICE).
   - `status` — `PLANNED`, `ACTIVE`, `EXPIRED`, `ARCHIVED`.
   - `only_active` — true/false (игнорируется, если задан `status`).
   - `start_from`, `start_to`, `end_from`, `end_to` — границы периода (RFC3339).
+
+**Доступ:**
+- `KGU_ZKH_ADMIN`, `AKIMAT_ADMIN` — все контракты
+- `CONTRACTOR_ADMIN` — только свои контракты (CONTRACTOR_SERVICE)
+- `LANDFILL_ADMIN` — только свои контракты (LANDFILL_SERVICE)
 
 **Ответ:**
 ```json
@@ -128,9 +139,10 @@ go run ./cmd/contract-service
 #### POST /contracts
 Создать новый контракт (только `KGU_ZKH_ADMIN`)
 
-**Тело запроса:**
+**Тело запроса для CONTRACTOR_SERVICE:**
 ```json
 {
+  "contract_type": "CONTRACTOR_SERVICE",
   "contractor_id": "uuid",
   "name": "Контракт на уборку дорог",
   "work_type": "road",
@@ -142,6 +154,31 @@ go run ./cmd/contract-service
   "is_active": true
 }
 ```
+
+**Тело запроса для LANDFILL_SERVICE:**
+```json
+{
+  "contract_type": "LANDFILL_SERVICE",
+  "landfill_id": "uuid",
+  "polygon_ids": ["uuid1", "uuid2", "uuid3"],
+  "name": "Контракт на приём снега",
+  "price_per_m3": 500.00,
+  "budget_total": 500000.00,
+  "minimal_volume_m3": 1000.00,
+  "start_at": "2024-01-01T00:00:00Z",
+  "end_at": "2024-12-31T23:59:59Z",
+  "is_active": true
+}
+```
+
+**Поля:**
+- `contract_type` (обязательно) — `CONTRACTOR_SERVICE` или `LANDFILL_SERVICE`
+- `contractor_id` (обязательно для CONTRACTOR_SERVICE) — UUID подрядчика
+- `landfill_id` (обязательно для LANDFILL_SERVICE) — UUID полигона приёма
+- `polygon_ids` (обязательно для LANDFILL_SERVICE) — массив UUID полигонов
+- `work_type` (обязательно для CONTRACTOR_SERVICE) — `road`, `sidewalk`, `yard`
+- `name`, `price_per_m3`, `budget_total`, `minimal_volume_m3`, `start_at`, `end_at` (обязательно)
+- `is_active` (опционально, по умолчанию `true`)
 
 **Ответ:** 201 Created с созданным контрактом
 
@@ -224,9 +261,10 @@ go run ./cmd/contract-service
 
 | Роль              | Возможности                                                        |
 |-------------------|--------------------------------------------------------------------|
-| `KGU_ZKH_ADMIN`   | Создаёт контракты, читает все, линкует тикеты, пишет usage         |
+| `KGU_ZKH_ADMIN`   | Создаёт контракты (CONTRACTOR_SERVICE и LANDFILL_SERVICE), читает все, линкует тикеты, пишет usage |
 | `AKIMAT_ADMIN`    | Read-only по всем контрактам + `POST /trips/usage`                 |
-| `CONTRACTOR_ADMIN`| Читает только свои контракты/тикеты/рейсы                          |
+| `CONTRACTOR_ADMIN`| Читает только свои контракты (CONTRACTOR_SERVICE)/тикеты/рейсы    |
+| `LANDFILL_ADMIN`  | Читает только свои контракты (LANDFILL_SERVICE)                    |
 | `TOO_ADMIN`       | Нет доступа (403)                                                  |
 | `DRIVER`          | Нет доступа (403)                                                  |
 

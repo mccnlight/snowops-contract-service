@@ -20,6 +20,8 @@ var (
 
 type ContractFilter struct {
 	ContractorID *uuid.UUID
+	LandfillID   *uuid.UUID
+	ContractType *model.ContractType
 	CreatedByOrg *uuid.UUID
 	WorkType     *model.WorkType
 	OnlyActive   bool
@@ -45,7 +47,9 @@ func (r *ContractRepository) List(ctx context.Context, filter ContractFilter) ([
 		Select(`
 			c.id,
 			c.contractor_id,
+			c.landfill_id,
 			c.created_by_org AS created_by_org_id,
+			c.contract_type,
 			c.name,
 			c.work_type,
 			c.price_per_m3,
@@ -60,6 +64,12 @@ func (r *ContractRepository) List(ctx context.Context, filter ContractFilter) ([
 
 	if filter.ContractorID != nil {
 		query = query.Where("c.contractor_id = ?", *filter.ContractorID)
+	}
+	if filter.LandfillID != nil {
+		query = query.Where("c.landfill_id = ?", *filter.LandfillID)
+	}
+	if filter.ContractType != nil {
+		query = query.Where("c.contract_type = ?", string(*filter.ContractType))
 	}
 	if filter.CreatedByOrg != nil {
 		query = query.Where("c.created_by_org = ?", *filter.CreatedByOrg)
@@ -112,6 +122,13 @@ func (r *ContractRepository) List(ctx context.Context, filter ContractFilter) ([
 			if err == nil {
 				contracts[i].Usage = usage
 			}
+			// Загружаем polygon_ids для LANDFILL_SERVICE контрактов
+			if contracts[i].ContractType == model.ContractTypeLandfillService {
+				polygonIDs, err := r.GetPolygonIDs(ctx, contracts[i].ID)
+				if err == nil {
+					contracts[i].PolygonIDs = polygonIDs
+				}
+			}
 		}
 	}
 
@@ -125,7 +142,9 @@ func (r *ContractRepository) GetByID(ctx context.Context, id uuid.UUID, includeU
 			SELECT
 				c.id,
 				c.contractor_id,
+				c.landfill_id,
 				c.created_by_org AS created_by_org_id,
+				c.contract_type,
 				c.name,
 				c.work_type,
 				c.price_per_m3,
@@ -151,6 +170,14 @@ func (r *ContractRepository) GetByID(ctx context.Context, id uuid.UUID, includeU
 		usage, err := r.getUsage(ctx, contract.ID)
 		if err == nil {
 			contract.Usage = usage
+		}
+	}
+
+	// Загружаем polygon_ids для LANDFILL_SERVICE контрактов
+	if contract.ContractType == model.ContractTypeLandfillService {
+		polygonIDs, err := r.GetPolygonIDs(ctx, contract.ID)
+		if err == nil {
+			contract.PolygonIDs = polygonIDs
 		}
 	}
 
@@ -181,7 +208,9 @@ func (r *ContractRepository) getUsage(ctx context.Context, contractID uuid.UUID)
 }
 
 type CreateContractParams struct {
-	ContractorID    uuid.UUID
+	ContractorID    *uuid.UUID
+	LandfillID      *uuid.UUID
+	ContractType    model.ContractType
 	CreatedByOrgID  uuid.UUID
 	Name            string
 	WorkType        model.WorkType
@@ -191,6 +220,7 @@ type CreateContractParams struct {
 	StartAt         time.Time
 	EndAt           time.Time
 	IsActive        bool
+	PolygonIDs      []uuid.UUID
 }
 
 func (r *ContractRepository) Create(ctx context.Context, params CreateContractParams) (*model.Contract, error) {
@@ -198,6 +228,8 @@ func (r *ContractRepository) Create(ctx context.Context, params CreateContractPa
 	err := r.db.WithContext(ctx).Raw(`
 		INSERT INTO contracts (
 			contractor_id,
+			landfill_id,
+			contract_type,
 			created_by_org,
 			name,
 			work_type,
@@ -208,11 +240,13 @@ func (r *ContractRepository) Create(ctx context.Context, params CreateContractPa
 			end_at,
 			is_active
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING
 			id,
 			contractor_id,
+			landfill_id,
 			created_by_org AS created_by_org_id,
+			contract_type,
 			name,
 			work_type,
 			price_per_m3,
@@ -223,7 +257,7 @@ func (r *ContractRepository) Create(ctx context.Context, params CreateContractPa
 			is_active,
 			created_at,
 			NULL::TIMESTAMPTZ AS updated_at
-	`, params.ContractorID, params.CreatedByOrgID, params.Name, string(params.WorkType),
+	`, params.ContractorID, params.LandfillID, string(params.ContractType), params.CreatedByOrgID, params.Name, string(params.WorkType),
 		params.PricePerM3, params.BudgetTotal, params.MinimalVolumeM3,
 		params.StartAt, params.EndAt, params.IsActive).Scan(&contract).Error
 	if err != nil {
@@ -238,6 +272,14 @@ func (r *ContractRepository) Create(ctx context.Context, params CreateContractPa
 	`, contract.ID).Error
 	if err != nil {
 		return nil, err
+	}
+
+	// Сохраняем polygon_ids для LANDFILL_SERVICE контрактов
+	if params.ContractType == model.ContractTypeLandfillService && len(params.PolygonIDs) > 0 {
+		if err := r.SetPolygonIDs(ctx, contract.ID, params.PolygonIDs); err != nil {
+			return nil, err
+		}
+		contract.PolygonIDs = params.PolygonIDs
 	}
 
 	return &contract, nil
@@ -396,4 +438,46 @@ func (r *ContractRepository) ListContractTrips(ctx context.Context, contractID u
 		return nil, err
 	}
 	return items, nil
+}
+
+// GetPolygonIDs возвращает список polygon_id для контракта
+func (r *ContractRepository) GetPolygonIDs(ctx context.Context, contractID uuid.UUID) ([]uuid.UUID, error) {
+	var polygonIDs []uuid.UUID
+	err := r.db.WithContext(ctx).
+		Raw(`
+			SELECT polygon_id
+			FROM contract_polygons
+			WHERE contract_id = ?
+			ORDER BY polygon_id
+		`, contractID).Scan(&polygonIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	return polygonIDs, nil
+}
+
+// SetPolygonIDs устанавливает список polygon_id для контракта
+func (r *ContractRepository) SetPolygonIDs(ctx context.Context, contractID uuid.UUID, polygonIDs []uuid.UUID) error {
+	// Удаляем существующие связи
+	if err := r.db.WithContext(ctx).Exec(`
+		DELETE FROM contract_polygons
+		WHERE contract_id = ?
+	`, contractID).Error; err != nil {
+		return err
+	}
+
+	// Добавляем новые связи
+	if len(polygonIDs) > 0 {
+		for _, polygonID := range polygonIDs {
+			if err := r.db.WithContext(ctx).Exec(`
+				INSERT INTO contract_polygons (contract_id, polygon_id)
+				VALUES (?, ?)
+				ON CONFLICT (contract_id, polygon_id) DO NOTHING
+			`, contractID, polygonID).Error; err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

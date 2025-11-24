@@ -28,6 +28,8 @@ func NewContractService(contracts *repository.ContractRepository) *ContractServi
 
 type ListContractsInput struct {
 	ContractorID *uuid.UUID
+	LandfillID   *uuid.UUID
+	ContractType *model.ContractType
 	WorkType     *model.WorkType
 	OnlyActive   bool
 	Status       *model.ContractUIStatus
@@ -52,9 +54,20 @@ func (s *ContractService) List(ctx context.Context, principal model.Principal, i
 	switch {
 	case principal.IsContractor():
 		filter.ContractorID = &principal.OrganizationID
+	case principal.IsLandfill():
+		// LANDFILL видит только свои контракты приёма
+		filter.LandfillID = &principal.OrganizationID
+		filterContractType := model.ContractTypeLandfillService
+		filter.ContractType = &filterContractType
 	case principal.IsKgu(), principal.IsAkimat():
 		if input.ContractorID != nil {
 			filter.ContractorID = input.ContractorID
+		}
+		if input.LandfillID != nil {
+			filter.LandfillID = input.LandfillID
+		}
+		if input.ContractType != nil {
+			filter.ContractType = input.ContractType
 		}
 	default:
 		return nil, ErrPermissionDenied
@@ -94,7 +107,10 @@ func (s *ContractService) Get(ctx context.Context, principal model.Principal, id
 }
 
 type CreateContractInput struct {
-	ContractorID    uuid.UUID
+	ContractType    model.ContractType
+	ContractorID    *uuid.UUID
+	LandfillID      *uuid.UUID
+	PolygonIDs      []uuid.UUID
 	Name            string
 	WorkType        model.WorkType
 	PricePerM3      float64
@@ -126,10 +142,28 @@ func (s *ContractService) Create(ctx context.Context, principal model.Principal,
 		return nil, ErrInvalidInput
 	}
 
-	if input.WorkType != model.WorkTypeRoad &&
-		input.WorkType != model.WorkTypeSidewalk &&
-		input.WorkType != model.WorkTypeYard {
+	// Валидация типа контракта
+	if input.ContractType != model.ContractTypeContractorService && input.ContractType != model.ContractTypeLandfillService {
 		return nil, ErrInvalidInput
+	}
+
+	// Валидация в зависимости от типа контракта
+	if input.ContractType == model.ContractTypeContractorService {
+		if input.ContractorID == nil {
+			return nil, ErrInvalidInput
+		}
+		if input.WorkType != model.WorkTypeRoad &&
+			input.WorkType != model.WorkTypeSidewalk &&
+			input.WorkType != model.WorkTypeYard {
+			return nil, ErrInvalidInput
+		}
+	} else if input.ContractType == model.ContractTypeLandfillService {
+		if input.LandfillID == nil {
+			return nil, ErrInvalidInput
+		}
+		if len(input.PolygonIDs) == 0 {
+			return nil, ErrInvalidInput
+		}
 	}
 
 	isActive := true
@@ -138,7 +172,10 @@ func (s *ContractService) Create(ctx context.Context, principal model.Principal,
 	}
 
 	params := repository.CreateContractParams{
+		ContractType:    input.ContractType,
 		ContractorID:    input.ContractorID,
+		LandfillID:      input.LandfillID,
+		PolygonIDs:      input.PolygonIDs,
 		CreatedByOrgID:  principal.OrganizationID,
 		Name:            strings.TrimSpace(input.Name),
 		WorkType:        input.WorkType,
@@ -321,7 +358,17 @@ func (s *ContractService) ListContractTrips(ctx context.Context, principal model
 func (s *ContractService) ensureReadAccess(principal model.Principal, contract *model.Contract) error {
 	switch {
 	case principal.IsContractor():
-		if contract.ContractorID != principal.OrganizationID {
+		if contract.ContractType != model.ContractTypeContractorService {
+			return ErrPermissionDenied
+		}
+		if contract.ContractorID == nil || *contract.ContractorID != principal.OrganizationID {
+			return ErrPermissionDenied
+		}
+	case principal.IsLandfill():
+		if contract.ContractType != model.ContractTypeLandfillService {
+			return ErrPermissionDenied
+		}
+		if contract.LandfillID == nil || *contract.LandfillID != principal.OrganizationID {
 			return ErrPermissionDenied
 		}
 	case principal.IsKgu(), principal.IsAkimat():
