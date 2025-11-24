@@ -32,6 +32,19 @@ var migrationStatements = []string{
 		is_active BOOLEAN NOT NULL DEFAULT TRUE,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);`,
+	`DO $$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'contracts' AND column_name = 'contract_type') THEN
+			ALTER TABLE contracts ADD COLUMN contract_type contract_type NOT NULL DEFAULT 'CONTRACTOR_SERVICE';
+		END IF;
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'contracts' AND column_name = 'landfill_id') THEN
+			ALTER TABLE contracts ADD COLUMN landfill_id UUID REFERENCES organizations(id);
+		END IF;
+		IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'contracts' AND column_name = 'contractor_id' AND is_nullable = 'NO') THEN
+			ALTER TABLE contracts ALTER COLUMN contractor_id DROP NOT NULL;
+		END IF;
+	END
+	$$;`,
 	`CREATE INDEX IF NOT EXISTS idx_contracts_contractor_id ON contracts (contractor_id) WHERE contractor_id IS NOT NULL;`,
 	`CREATE INDEX IF NOT EXISTS idx_contracts_landfill_id ON contracts (landfill_id) WHERE landfill_id IS NOT NULL;`,
 	`CREATE INDEX IF NOT EXISTS idx_contracts_created_by_org ON contracts (created_by_org);`,
