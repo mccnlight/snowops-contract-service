@@ -10,7 +10,9 @@ type UserRole string
 
 const (
 	UserRoleAkimatAdmin     UserRole = "AKIMAT_ADMIN"
+	UserRoleAkimatUser      UserRole = "AKIMAT_USER"
 	UserRoleKguZkhAdmin     UserRole = "KGU_ZKH_ADMIN"
+	UserRoleKguZkhUser      UserRole = "KGU_ZKH_USER"
 	UserRoleTooAdmin        UserRole = "TOO_ADMIN" // Deprecated: use LANDFILL_ADMIN
 	UserRoleLandfillAdmin   UserRole = "LANDFILL_ADMIN"
 	UserRoleLandfillUser    UserRole = "LANDFILL_USER"
@@ -114,11 +116,11 @@ type Principal struct {
 }
 
 func (p Principal) IsAkimat() bool {
-	return p.Role == UserRoleAkimatAdmin
+	return p.Role == UserRoleAkimatAdmin || p.Role == UserRoleAkimatUser
 }
 
 func (p Principal) IsKgu() bool {
-	return p.Role == UserRoleKguZkhAdmin
+	return p.Role == UserRoleKguZkhAdmin || p.Role == UserRoleKguZkhUser
 }
 
 func (p Principal) IsToo() bool {
