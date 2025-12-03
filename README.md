@@ -5,14 +5,14 @@ Contract-service отвечает за управление контрактам
 ## Highlights
 
 - Derived fields (`contract_ui_status`, `contract_result`, `payable_amount`, `budget_exceeded`, `volume_progress`) are calculated for every contract response based on the accumulated `contract_usage`.
-- Contracts are immutable after they are created to mirror the PDF requirements; no PATCH or DELETE endpoints exist in this service.
+- Contracts can be deleted by `KGU_ZKH_ADMIN` users who created them. Deletion with `force=true` will cascade delete related tickets.
 - The global `ticket` table now has a mandatory `contract_id` foreign key. Binding happens exactly once via `PUT /tickets/:ticket_id/contract`.
 - Each trip volume is reported through `POST /trips/usage`, which updates both `contract_usage` and the immutable `trip_usage_log`.
 
 ## Возможности
 
 - Управление контрактами:
-  - `KGU_ZKH_ADMIN` — единственный, кто создаёт контракты (без редактирования/удаления после сохранения).
+  - `KGU_ZKH_ADMIN` — создаёт и удаляет контракты (только те, которые создал сам).
   - `AKIMAT_ADMIN` — полный read-only, может фиксировать usage для аудита.
   - `CONTRACTOR_ADMIN` — read-only только по своим контрактам.
   - `LANDFILL_ADMIN` — read-only только по своим контрактам приёма (LANDFILL_SERVICE).
@@ -185,6 +185,56 @@ go run ./cmd/contract-service
 #### GET /contracts/:id
 Получить контракт по ID (read-only карточка со всеми вычисляемыми полями)
 
+#### GET /contracts/:id/deletion-info
+Получить информацию о зависимостях контракта перед удалением.
+
+**Доступ:** `KGU_ZKH_ADMIN` (только для контрактов, созданных организацией пользователя)
+
+**Ответ:** 200 OK
+```json
+{
+  "data": {
+    "contract": {
+      "id": "uuid",
+      "name": "Контракт на уборку дорог"
+    },
+    "dependencies": {
+      "tickets_count": 5,
+      "trips_count": 12,
+      "assignments_count": 3,
+      "appeals_count": 1,
+      "usage_log_count": 12,
+      "polygons_count": 2
+    },
+    "will_be_deleted": {
+      "tickets": true,
+      "trips": true,
+      "assignments": true,
+      "appeals": true,
+      "usage_log": true,
+      "polygons": true
+    }
+  }
+}
+```
+
+#### DELETE /contracts/:id
+Удалить контракт.
+
+**Доступ:** `KGU_ZKH_ADMIN` (только для контрактов, созданных организацией пользователя)
+
+**Query параметры:**
+- `force` (опционально) — если `true`, удаляет контракт вместе со всеми связанными тикетами. Если `false` или не указан, возвращает ошибку 409 Conflict, если есть связанные тикеты.
+
+**Поведение:**
+- Если `force=false` и есть связанные тикеты → 409 Conflict
+- Если `force=true`:
+  - Сначала удаляются все связанные тикеты (каскадно удаляются назначения и апелляции)
+  - Затем удаляется контракт (каскадно удаляются полигоны, usage и trip_usage_log)
+  - Рейсы (`trips`) остаются, но `ticket_id` становится `NULL`
+
+**Ответ:** 204 No Content при успехе
+
 #### GET /contracts/:id/tickets
 Таблица тикетов, привязанных к контракту.
 
@@ -261,7 +311,7 @@ go run ./cmd/contract-service
 
 | Роль              | Возможности                                                        |
 |-------------------|--------------------------------------------------------------------|
-| `KGU_ZKH_ADMIN`   | Создаёт контракты (CONTRACTOR_SERVICE и LANDFILL_SERVICE), читает все, линкует тикеты, пишет usage |
+| `KGU_ZKH_ADMIN`   | Создаёт и удаляет контракты (CONTRACTOR_SERVICE и LANDFILL_SERVICE), читает все, линкует тикеты, пишет usage |
 | `AKIMAT_ADMIN`    | Read-only по всем контрактам + `POST /trips/usage`                 |
 | `CONTRACTOR_ADMIN`| Читает только свои контракты (CONTRACTOR_SERVICE)/тикеты/рейсы    |
 | `LANDFILL_ADMIN`  | Читает только свои контракты (LANDFILL_SERVICE)                    |

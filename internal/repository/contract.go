@@ -481,3 +481,115 @@ func (r *ContractRepository) SetPolygonIDs(ctx context.Context, contractID uuid.
 
 	return nil
 }
+
+// Delete deletes a contract by ID
+func (r *ContractRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Table("contracts").
+		Where("id = ?", id).
+		Delete(nil)
+
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// HasRelatedTickets checks if a contract has linked tickets
+func (r *ContractRepository) HasRelatedTickets(ctx context.Context, contractID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Table("tickets").
+		Where("contract_id = ?", contractID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// ContractDependencies contains dependency counts for a contract
+type ContractDependencies struct {
+	TicketsCount     int64 `json:"tickets_count"`
+	TripsCount       int64 `json:"trips_count"`
+	AssignmentsCount int64 `json:"assignments_count"`
+	AppealsCount     int64 `json:"appeals_count"`
+	UsageLogCount    int64 `json:"usage_log_count"`
+	PolygonsCount    int64 `json:"polygons_count"`
+}
+
+// GetDependencies returns dependency counts for a contract
+func (r *ContractRepository) GetDependencies(ctx context.Context, contractID uuid.UUID) (*ContractDependencies, error) {
+	var deps ContractDependencies
+
+	// Count tickets
+	if err := r.db.WithContext(ctx).
+		Table("tickets").
+		Where("contract_id = ?", contractID).
+		Count(&deps.TicketsCount).Error; err != nil {
+		return nil, err
+	}
+
+	// Count trips via tickets
+	if err := r.db.WithContext(ctx).
+		Table("trips").
+		Joins("JOIN tickets ON tickets.id = trips.ticket_id").
+		Where("tickets.contract_id = ?", contractID).
+		Count(&deps.TripsCount).Error; err != nil {
+		return nil, err
+	}
+
+	// Count ticket assignments via tickets
+	if err := r.db.WithContext(ctx).
+		Table("ticket_assignments").
+		Joins("JOIN tickets ON tickets.id = ticket_assignments.ticket_id").
+		Where("tickets.contract_id = ?", contractID).
+		Count(&deps.AssignmentsCount).Error; err != nil {
+		return nil, err
+	}
+
+	// Count appeals via tickets
+	if err := r.db.WithContext(ctx).
+		Table("appeals").
+		Joins("JOIN tickets ON tickets.id = appeals.ticket_id").
+		Where("tickets.contract_id = ? AND appeals.ticket_id IS NOT NULL", contractID).
+		Count(&deps.AppealsCount).Error; err != nil {
+		return nil, err
+	}
+
+	// Count trip usage log entries
+	if err := r.db.WithContext(ctx).
+		Table("trip_usage_log").
+		Where("contract_id = ?", contractID).
+		Count(&deps.UsageLogCount).Error; err != nil {
+		return nil, err
+	}
+
+	// Count polygons
+	if err := r.db.WithContext(ctx).
+		Table("contract_polygons").
+		Where("contract_id = ?", contractID).
+		Count(&deps.PolygonsCount).Error; err != nil {
+		return nil, err
+	}
+
+	return &deps, nil
+}
+
+// DeleteTicketsByContractID deletes all tickets linked to a contract
+// This is used when force=true to allow contract deletion
+func (r *ContractRepository) DeleteTicketsByContractID(ctx context.Context, contractID uuid.UUID) error {
+	// Deleting tickets will cascade to:
+	// - ticket_assignments (ON DELETE CASCADE)
+	// - appeals (ON DELETE CASCADE)
+	// trips.ticket_id will be set to NULL (ON DELETE SET NULL)
+	result := r.db.WithContext(ctx).
+		Table("tickets").
+		Where("contract_id = ?", contractID).
+		Delete(nil)
+
+	return result.Error
+}

@@ -378,3 +378,88 @@ func (s *ContractService) ensureReadAccess(principal model.Principal, contract *
 	}
 	return nil
 }
+
+type DeletionInfo struct {
+	Contract     *model.Contract
+	Dependencies *repository.ContractDependencies
+}
+
+func (s *ContractService) GetDeletionInfo(ctx context.Context, principal model.Principal, id uuid.UUID) (*DeletionInfo, error) {
+	if !principal.IsKgu() {
+		return nil, ErrPermissionDenied
+	}
+
+	// Check if contract exists
+	contract, err := s.contracts.GetByID(ctx, id, false)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify contract was created by the principal's organization
+	if contract.CreatedByOrgID != principal.OrganizationID {
+		return nil, ErrPermissionDenied
+	}
+
+	// Get dependency information
+	deps, err := s.contracts.GetDependencies(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DeletionInfo{
+		Contract:     contract,
+		Dependencies: deps,
+	}, nil
+}
+
+func (s *ContractService) Delete(ctx context.Context, principal model.Principal, id uuid.UUID, force bool) error {
+	if !principal.IsKgu() {
+		return ErrPermissionDenied
+	}
+
+	// Check if contract exists
+	contract, err := s.contracts.GetByID(ctx, id, false)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	// Verify contract was created by the principal's organization
+	if contract.CreatedByOrgID != principal.OrganizationID {
+		return ErrPermissionDenied
+	}
+
+	// If force=false, check for related tickets
+	if !force {
+		hasTickets, err := s.contracts.HasRelatedTickets(ctx, id)
+		if err != nil {
+			return err
+		}
+		if hasTickets {
+			return ErrConflict
+		}
+	}
+
+	// If force=true, delete tickets first (cascades to assignments and appeals)
+	// trips.ticket_id will be set to NULL automatically via ON DELETE SET NULL
+	if force {
+		if err := s.contracts.DeleteTicketsByContractID(ctx, id); err != nil {
+			return err
+		}
+	}
+
+	// Delete contract (cascades to polygons, usage, trip_usage_log)
+	if err := s.contracts.Delete(ctx, id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	return nil
+}

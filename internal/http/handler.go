@@ -37,6 +37,8 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 	protected.GET("/contracts", h.listContracts)
 	protected.POST("/contracts", h.createContract)
 	protected.GET("/contracts/:id", h.getContract)
+	protected.GET("/contracts/:id/deletion-info", h.getContractDeletionInfo)
+	protected.DELETE("/contracts/:id", h.deleteContract)
 	protected.GET("/contracts/:id/tickets", h.listContractTickets)
 	protected.GET("/contracts/:id/trips", h.listContractTrips)
 	protected.PUT("/tickets/:ticket_id/contract", h.assignTicketContract)
@@ -413,6 +415,73 @@ func (h *Handler) recordTripUsage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, successResponse(gin.H{"status": "recorded"}))
+}
+
+func (h *Handler) getContractDeletionInfo(c *gin.Context) {
+	principal, ok := middleware.MustPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, errorResponse("missing principal"))
+		return
+	}
+
+	contractID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid contract id"))
+		return
+	}
+
+	info, err := h.contracts.GetDeletionInfo(c.Request.Context(), principal, contractID)
+	if err != nil {
+		h.handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, successResponse(gin.H{
+		"contract": gin.H{
+			"id":   info.Contract.ID,
+			"name": info.Contract.Name,
+		},
+		"dependencies": gin.H{
+			"tickets_count":     info.Dependencies.TicketsCount,
+			"trips_count":       info.Dependencies.TripsCount,
+			"assignments_count": info.Dependencies.AssignmentsCount,
+			"appeals_count":     info.Dependencies.AppealsCount,
+			"usage_log_count":   info.Dependencies.UsageLogCount,
+			"polygons_count":    info.Dependencies.PolygonsCount,
+		},
+		"will_be_deleted": gin.H{
+			"tickets":     info.Dependencies.TicketsCount > 0,
+			"trips":       info.Dependencies.TripsCount > 0,
+			"assignments": info.Dependencies.AssignmentsCount > 0,
+			"appeals":     info.Dependencies.AppealsCount > 0,
+			"usage_log":   info.Dependencies.UsageLogCount > 0,
+			"polygons":    info.Dependencies.PolygonsCount > 0,
+		},
+	}))
+}
+
+func (h *Handler) deleteContract(c *gin.Context) {
+	principal, ok := middleware.MustPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, errorResponse("missing principal"))
+		return
+	}
+
+	contractID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid contract id"))
+		return
+	}
+
+	// Check force parameter for cascade deletion
+	force := parseBoolQuery(c.Query("force"))
+
+	if err := h.contracts.Delete(c.Request.Context(), principal, contractID, force); err != nil {
+		h.handleError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func (h *Handler) handleError(c *gin.Context, err error) {
